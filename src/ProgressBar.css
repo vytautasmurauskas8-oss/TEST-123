@@ -43,6 +43,7 @@
 
 /* Pats slideris */
 .progress-slider {
+  --progress-color: #22c55e;
   width: 100%;
   height: 14px;
   margin: 0;
@@ -56,13 +57,13 @@
 
   background: linear-gradient(
     to right,
-    var(--accent) 0%,
-    var(--accent) var(--progress),
+    var(--progress-color) 0%,
+    var(--progress-color) var(--progress),
     var(--accent-bg) var(--progress),
     var(--accent-bg) 100%
   );
 
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--progress-color);
 }
 
 /* Chrome, Edge, Safari */
@@ -74,10 +75,10 @@
   height: 22px;
   border-radius: 50%;
 
-  background: var(--accent);
+  background: #22c55e;
   border: 3px solid var(--bg);
 
-  box-shadow: 0 0 0 2px var(--accent-border);
+  box-shadow: 0 0 0 2px #22c55e;
 
   cursor: grab;
 }
@@ -93,10 +94,10 @@
   height: 18px;
   border-radius: 50%;
 
-  background: var(--accent);
+  background: #22c55e;
   border: 3px solid var(--bg);
 
-  box-shadow: 0 0 0 2px var(--accent-border);
+  box-shadow: 0 0 0 2px #22c55e;
 
   cursor: grab;
 }
