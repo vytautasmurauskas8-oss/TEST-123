@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import TaskList from "./TaskList";
 import ProgressBar from "./ProgressBar";
 import Navbar from "./Navbar";
@@ -50,7 +50,7 @@ function App() {
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState("");
 
-  const loadTasks = useCallback(async () => {
+  const loadTasks = useCallback(async (ownerId) => {
     setTasksLoading(true);
     setTasksError("");
     try {
@@ -58,34 +58,13 @@ function App() {
       if (!response.ok) throw new Error(`Nepavyko įkelti užduočių (${response.status}).`);
       const records = getRecords(await response.json());
       if (!records) throw new Error("API grąžino netinkamą užduočių formatą.");
-      setTasks(records.map(normalizeTask));
+      setTasks(records.map(normalizeTask).filter((task) => String(task.userId ?? task.ownerId) === String(ownerId)));
     } catch (error) {
       setTasksError(error.message || "Nepavyko susisiekti su API.");
     } finally {
       setTasksLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    let isActive = true;
-
-    async function fetchTasks() {
-      try {
-        const response = await fetch(TASKS_API);
-        if (!response.ok) throw new Error(`Nepavyko įkelti užduočių (${response.status}).`);
-        const records = getRecords(await response.json());
-        if (!records) throw new Error("API grąžino netinkamą užduočių formatą.");
-        if (isActive) setTasks(records.map(normalizeTask));
-      } catch (error) {
-        if (isActive) setTasksError(error.message || "Nepavyko susisiekti su API.");
-      } finally {
-        if (isActive) setTasksLoading(false);
-      }
-    }
-
-    fetchTasks();
-    return () => { isActive = false; };
-  }, [loadTasks]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -101,6 +80,7 @@ function App() {
       const existingUser = records.find((user) =>
         String(user.username ?? user.name ?? "").toLowerCase() === cleanUsername.toLowerCase(),
       );
+      let authenticatedUser;
 
       if (authMode === "register") {
         if (existingUser) throw new Error("Šis vartotojo vardas jau užregistruotas.");
@@ -114,13 +94,16 @@ function App() {
         if (!created) throw new Error("API negrąžino sukurto vartotojo. Patikrinkite API atsakymą.");
         const savedUser = created?.data ?? created;
         if (savedUser.id == null && savedUser._id == null) throw new Error("Registracijos atsakyme trūksta vartotojo ID.");
-        setCurrentUser({ ...savedUser, username: savedUser.username ?? cleanUsername, fullName: savedUser.fullName ?? fullName.trim() });
+        authenticatedUser = { ...savedUser, id: savedUser.id ?? savedUser._id, username: savedUser.username ?? cleanUsername, fullName: savedUser.fullName ?? fullName.trim() };
       } else {
         if (!existingUser || existingUser.password !== password) {
           throw new Error("Neteisingas vartotojo vardas arba slaptažodis.");
         }
-        setCurrentUser(existingUser);
+        authenticatedUser = { ...existingUser, id: existingUser.id ?? existingUser._id };
       }
+      setCurrentUser(authenticatedUser);
+      setTasksLoading(true);
+      await loadTasks(authenticatedUser.id);
       setPassword("");
     } catch (error) {
       setAuthError(error.message || "Nepavyko atlikti veiksmo.");
@@ -132,13 +115,21 @@ function App() {
   async function handleAddTask(newTask) {
     setTasksError("");
     try {
+      const ownerId = currentUser.id ?? currentUser._id;
       const response = await fetch(TASKS_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newTask),
+        body: JSON.stringify({ ...newTask, userId: ownerId }),
       });
       if (!response.ok) throw new Error(`Nepavyko pridėti užduoties (${response.status}).`);
-      await loadTasks();
+      const created = await readResponse(response);
+      const createdTask = created?.data ?? created;
+      if (createdTask && typeof createdTask === "object") {
+        const savedTask = normalizeTask({ ...newTask, ...createdTask, userId: createdTask.userId ?? createdTask.ownerId ?? ownerId });
+        setTasks((currentTasks) => [...currentTasks, savedTask]);
+      } else {
+        setTasks((currentTasks) => [...currentTasks, normalizeTask({ ...newTask, userId: ownerId, id: `local-${Date.now()}` })]);
+      }
       return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko pridėti užduoties.");
@@ -148,28 +139,23 @@ function App() {
 
   async function updateTask(taskId, changes) {
     const task = tasks.find((item) => String(item.id) === String(taskId));
-    if (!task) return false;
+    if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) return false;
     setTasksError("");
     try {
       const response = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...task, ...changes }),
+        body: JSON.stringify({ ...task, ...changes, userId: currentUser.id ?? currentUser._id }),
       });
       if (!response.ok) throw new Error(`Nepavyko atnaujinti užduoties (${response.status}).`);
-      await readResponse(response);
-      const verifyResponse = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`);
-      if (!verifyResponse.ok) throw new Error("Nepavyko patikrinti išsaugotos užduoties.");
-      const result = await verifyResponse.json();
-      const savedTask = normalizeTask(result?.data ?? result);
-      if (String(savedTask.id) !== String(taskId) || Object.entries(changes).some(([key, value]) => savedTask[key] !== value)) {
-        throw new Error("API nepatvirtino atnaujintų užduoties duomenų.");
-      }
+      const result = await readResponse(response);
+      const returnedTask = result?.data ?? result;
+      const savedTask = normalizeTask({ ...task, ...changes, ...(returnedTask && typeof returnedTask === "object" ? returnedTask : {}) });
       setTasks((currentTasks) => currentTasks.map((item) => String(item.id) === String(taskId) ? savedTask : item));
       return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko atnaujinti užduoties.");
-      await loadTasks();
+      await loadTasks(currentUser.id ?? currentUser._id);
       return false;
     }
   }
@@ -185,6 +171,8 @@ function App() {
   async function handleDeleteTask(taskId) {
     setTasksError("");
     try {
+      const task = tasks.find((item) => String(item.id) === String(taskId));
+      if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) throw new Error("Galite trinti tik savo užduotis.");
       const response = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`Nepavyko ištrinti užduoties (${response.status}).`);
       setTasks((currentTasks) => currentTasks.filter((task) => String(task.id) !== String(taskId)));
@@ -229,7 +217,7 @@ function App() {
               <>
                 <section className="dashboard-summary" aria-label="Užduočių suvestinė"><p><strong>{tasks.length} užduotys</strong><span aria-hidden="true"> · </span><strong>{completedTaskCount} atliktos</strong><span aria-hidden="true"> · </span><strong>{overdueTaskCount} vėluoja</strong></p></section>
                 <TaskList tasks={tasks} loading={tasksLoading} onStatusChange={handleTaskStatusChange} onDeadlineChange={handleTaskDeadlineChange} onTaskUpdate={updateTask} onDelete={handleDeleteTask} />
-                {tasksError && <div className="task-api-error" role="alert"><span>{tasksError}</span><button type="button" onClick={loadTasks}>Bandyti dar kartą</button></div>}
+                {tasksError && <div className="task-api-error" role="alert"><span>{tasksError}</span><button type="button" onClick={() => loadTasks(currentUser.id ?? currentUser._id)}>Bandyti dar kartą</button></div>}
                 <AddTaskForm onAddTask={handleAddTask} />
                 <ProgressBar initialProgress={50} />
               </>
@@ -238,7 +226,7 @@ function App() {
         </>
       )}
       {activePage === "profile" && currentUser && <Profile user={profileUser} tasks={tasks} />}
-      {currentUser && <button type="button" className="logout-button" onClick={() => { setCurrentUser(null); setPassword(""); setActivePage("home"); }}>Atsijungti</button>}
+      {currentUser && <button type="button" className="logout-button" onClick={() => { setCurrentUser(null); setPassword(""); setTasks([]); setActivePage("home"); }}>Atsijungti</button>}
     </>
   );
 }
