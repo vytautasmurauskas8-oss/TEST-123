@@ -28,6 +28,7 @@ function FlowlyLogo() {
 function Navbar({ activePage, onNavigate }) {
   const navigationItems = [
     { label: "Pagrindinis", page: "home", disabled: false },
+    { label: "ORAI", page: "weather", disabled: false },
     { label: "Užduotys", page: null, disabled: true },
     { label: "Progresas", page: null, disabled: true },
     { label: "Profilis", page: "profile", disabled: false },

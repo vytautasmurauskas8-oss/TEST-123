@@ -4,6 +4,7 @@ import ProgressBar from "./ProgressBar";
 import Navbar from "./Navbar";
 import AddTaskForm from "./AddTaskForm";
 import Profile from "./Profile";
+import Weather from "./Weather";
 import "./App.css";
 
 const TASKS_API = "https://testapi.io/api/vytautasmurauskas8-oss/resource/Tasklist";
@@ -14,10 +15,15 @@ function getTaskStorageKey(ownerId) {
   return `flowly-tasks-${ownerId}`;
 }
 
+function getOwnerId(user) {
+  return user?.id ?? user?._id ?? user?.username ?? user?.name;
+}
+
 function readSavedTasks(ownerId) {
   try {
     const savedTasks = localStorage.getItem(getTaskStorageKey(ownerId));
-    return savedTasks ? JSON.parse(savedTasks) : [];
+    const parsedTasks = savedTasks ? JSON.parse(savedTasks) : [];
+    return Array.isArray(parsedTasks) ? parsedTasks : [];
   } catch {
     return [];
   }
@@ -42,7 +48,7 @@ function getSavedUser() {
 
 function getInitialTasks() {
   const savedUser = getSavedUser();
-  const ownerId = savedUser?.id ?? savedUser?._id;
+  const ownerId = getOwnerId(savedUser);
   return ownerId == null ? [] : readSavedTasks(ownerId);
 }
 
@@ -124,7 +130,7 @@ function App() {
         if (!response.ok) throw new Error(`Nepavyko įkelti užduočių (${response.status}).`);
         const records = getRecords(await response.json());
         if (!records) throw new Error("API grąžino netinkamą užduočių formatą.");
-        const ownerId = currentUser.id ?? currentUser._id;
+        const ownerId = getOwnerId(currentUser);
         const cachedTasks = readSavedTasks(ownerId);
         const apiTasks = records
           .map(normalizeTask)
@@ -142,7 +148,7 @@ function App() {
         }
       } catch (error) {
         if (isActive) {
-          const ownerId = currentUser.id ?? currentUser._id;
+          const ownerId = getOwnerId(currentUser);
           setTasks(readSavedTasks(ownerId));
           setTasksError(error.message || "Nepavyko susisiekti su API.");
         }
@@ -204,7 +210,7 @@ function App() {
   async function handleAddTask(newTask) {
     setTasksError("");
     try {
-      const ownerId = currentUser.id ?? currentUser._id;
+      const ownerId = getOwnerId(currentUser);
       const response = await fetch(TASKS_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -233,12 +239,12 @@ function App() {
 
   async function updateTask(taskId, changes) {
     const task = tasks.find((item) => String(item.id) === String(taskId));
-    if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) return false;
+    if (!task || String(task.userId ?? task.ownerId) !== String(getOwnerId(currentUser))) return false;
     setTasksError("");
     if (String(taskId).startsWith("local-")) {
       setTasks((currentTasks) => {
         const updatedTasks = currentTasks.map((item) => String(item.id) === String(taskId) ? { ...item, ...changes } : item);
-        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        saveTasksForUser(getOwnerId(currentUser), updatedTasks);
         return updatedTasks;
       });
       return true;
@@ -247,7 +253,7 @@ function App() {
       const response = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...task, ...changes, userId: currentUser.id ?? currentUser._id }),
+        body: JSON.stringify({ ...task, ...changes, userId: getOwnerId(currentUser) }),
       });
       if (!response.ok) throw new Error(`Nepavyko atnaujinti užduoties (${response.status}).`);
       const result = await readResponse(response);
@@ -255,13 +261,13 @@ function App() {
       const savedTask = normalizeTask({ ...task, ...changes, ...(returnedTask && typeof returnedTask === "object" ? returnedTask : {}) });
       setTasks((currentTasks) => {
         const updatedTasks = currentTasks.map((item) => String(item.id) === String(taskId) ? savedTask : item);
-        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        saveTasksForUser(getOwnerId(currentUser), updatedTasks);
         return updatedTasks;
       });
       return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko atnaujinti užduoties.");
-      const ownerId = currentUser.id ?? currentUser._id;
+      const ownerId = getOwnerId(currentUser);
       await loadTasks(ownerId);
       return false;
     }
@@ -279,11 +285,11 @@ function App() {
     setTasksError("");
     try {
       const task = tasks.find((item) => String(item.id) === String(taskId));
-      if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) throw new Error("Galite trinti tik savo užduotis.");
+      if (!task || String(task.userId ?? task.ownerId) !== String(getOwnerId(currentUser))) throw new Error("Galite trinti tik savo užduotis.");
       if (String(taskId).startsWith("local-")) {
         setTasks((currentTasks) => {
           const updatedTasks = currentTasks.filter((item) => String(item.id) !== String(taskId));
-          saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+          saveTasksForUser(getOwnerId(currentUser), updatedTasks);
           return updatedTasks;
         });
         return;
@@ -292,7 +298,7 @@ function App() {
       if (!response.ok) throw new Error(`Nepavyko ištrinti užduoties (${response.status}).`);
       setTasks((currentTasks) => {
         const updatedTasks = currentTasks.filter((task) => String(task.id) !== String(taskId));
-        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        saveTasksForUser(getOwnerId(currentUser), updatedTasks);
         return updatedTasks;
       });
     } catch (error) {
@@ -336,7 +342,7 @@ function App() {
               <>
                 <section className="dashboard-summary" aria-label="Užduočių suvestinė"><p><strong>{tasks.length} užduotys</strong><span aria-hidden="true"> · </span><strong>{completedTaskCount} atliktos</strong><span aria-hidden="true"> · </span><strong>{overdueTaskCount} vėluoja</strong></p></section>
                 <TaskList tasks={tasks} loading={tasksLoading} onStatusChange={handleTaskStatusChange} onDeadlineChange={handleTaskDeadlineChange} onTaskUpdate={updateTask} onDelete={handleDeleteTask} />
-                {tasksError && <div className="task-api-error" role="alert"><span>{tasksError}</span><button type="button" onClick={() => loadTasks(currentUser.id ?? currentUser._id)}>Bandyti dar kartą</button></div>}
+                {tasksError && <div className="task-api-error" role="alert"><span>{tasksError}</span><button type="button" onClick={() => loadTasks(getOwnerId(currentUser))}>Bandyti dar kartą</button></div>}
                 <AddTaskForm onAddTask={handleAddTask} />
                 <ProgressBar initialProgress={50} />
               </>
@@ -345,6 +351,7 @@ function App() {
         </>
       )}
       {activePage === "profile" && currentUser && <Profile user={profileUser} tasks={tasks} />}
+      {activePage === "weather" && <Weather />}
       {currentUser && <button type="button" className="logout-button" onClick={() => { localStorage.removeItem(SESSION_KEY); setCurrentUser(null); setPassword(""); setTasks([]); setActivePage("home"); }}>Atsijungti</button>}
     </>
   );
