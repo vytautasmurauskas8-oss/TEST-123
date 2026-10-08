@@ -1,6 +1,6 @@
 import "./TaskList.css";
 
-function TaskList({ tasks = [], loading = false, onStatusChange, onDeadlineChange }) {
+function TaskList({ tasks = [], loading = false, onStatusChange, onDeadlineChange, onDelete }) {
   if (loading) {
     return (
       <section className="task-card">
@@ -60,6 +60,14 @@ function TaskList({ tasks = [], loading = false, onStatusChange, onDeadlineChang
                 aria-label={`Keisti užduoties „${task.title}“ terminą`}
               />
             </label>
+            <button
+              type="button"
+              className="task-delete-button"
+              onClick={() => onDelete?.(task.id)}
+              aria-label={`Ištrinti užduotį „${task.title}“`}
+            >
+              Ištrinti
+            </button>
           </article>
         ))}
       </div>

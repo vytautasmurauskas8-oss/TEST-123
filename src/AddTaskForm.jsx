@@ -7,17 +7,17 @@ function AddTaskForm({ onAddTask }) {
   const [deadline, setDeadline] = useState("");
   const [status, setStatus] = useState("Nepradėta");
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
     const newTask = {
-      id: Date.now(),
       title,
       status,
       deadline,
     };
 
-    onAddTask(newTask);
+    const wasCreated = await onAddTask(newTask);
+    if (!wasCreated) return;
 
     setTitle("");
     setDeadline("");
