@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import TaskList from "./TaskList";
 import ProgressBar from "./ProgressBar";
 import Navbar from "./Navbar";
@@ -8,6 +8,43 @@ import "./App.css";
 
 const TASKS_API = "https://testapi.io/api/vytautasmurauskas8-oss/resource/Tasklist";
 const USERS_API = "https://testapi.io/api/vytautasmurauskas8-oss/resource/username";
+const SESSION_KEY = "flowly-current-user";
+
+function getTaskStorageKey(ownerId) {
+  return `flowly-tasks-${ownerId}`;
+}
+
+function readSavedTasks(ownerId) {
+  try {
+    const savedTasks = localStorage.getItem(getTaskStorageKey(ownerId));
+    return savedTasks ? JSON.parse(savedTasks) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTasksForUser(ownerId, userTasks) {
+  try {
+    localStorage.setItem(getTaskStorageKey(ownerId), JSON.stringify(userTasks));
+  } catch {
+    // Keep task changes in memory if browser storage is unavailable.
+  }
+}
+
+function getSavedUser() {
+  try {
+    const savedUser = localStorage.getItem(SESSION_KEY);
+    return savedUser ? JSON.parse(savedUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+function getInitialTasks() {
+  const savedUser = getSavedUser();
+  const ownerId = savedUser?.id ?? savedUser?._id;
+  return ownerId == null ? [] : readSavedTasks(ownerId);
+}
 
 function normalizeTask(task) {
   return {
@@ -43,28 +80,80 @@ function App() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [authMode, setAuthMode] = useState("login");
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(getSavedUser);
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
-  const [tasks, setTasks] = useState([]);
+  const [tasks, setTasks] = useState(getInitialTasks);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState("");
 
   const loadTasks = useCallback(async (ownerId) => {
-    setTasksLoading(true);
-    setTasksError("");
+    const savedTasks = readSavedTasks(ownerId);
     try {
       const response = await fetch(TASKS_API);
       if (!response.ok) throw new Error(`Nepavyko įkelti užduočių (${response.status}).`);
       const records = getRecords(await response.json());
       if (!records) throw new Error("API grąžino netinkamą užduočių formatą.");
-      setTasks(records.map(normalizeTask).filter((task) => String(task.userId ?? task.ownerId) === String(ownerId)));
+      const ownedTasks = records
+        .map(normalizeTask)
+        .filter((task) => String(task.userId ?? task.ownerId) === String(ownerId));
+      const mergedTasks = [...savedTasks];
+      ownedTasks.forEach((apiTask) => {
+        const existingIndex = mergedTasks.findIndex((task) => String(task.id) === String(apiTask.id));
+        if (existingIndex === -1) mergedTasks.push(apiTask);
+        else mergedTasks[existingIndex] = { ...mergedTasks[existingIndex], ...apiTask };
+      });
+      setTasks(mergedTasks);
+      saveTasksForUser(ownerId, mergedTasks);
+      setTasksError("");
     } catch (error) {
+      setTasks(savedTasks);
       setTasksError(error.message || "Nepavyko susisiekti su API.");
     } finally {
       setTasksLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!currentUser) return undefined;
+    let isActive = true;
+
+    async function fetchUserTasks() {
+      try {
+        const response = await fetch(TASKS_API);
+        if (!response.ok) throw new Error(`Nepavyko įkelti užduočių (${response.status}).`);
+        const records = getRecords(await response.json());
+        if (!records) throw new Error("API grąžino netinkamą užduočių formatą.");
+        const ownerId = currentUser.id ?? currentUser._id;
+        const cachedTasks = readSavedTasks(ownerId);
+        const apiTasks = records
+          .map(normalizeTask)
+          .filter((task) => String(task.userId ?? task.ownerId) === String(ownerId));
+        const mergedTasks = [...cachedTasks];
+        apiTasks.forEach((apiTask) => {
+          const taskIndex = mergedTasks.findIndex((task) => String(task.id) === String(apiTask.id));
+          if (taskIndex === -1) mergedTasks.push(apiTask);
+          else mergedTasks[taskIndex] = { ...mergedTasks[taskIndex], ...apiTask };
+        });
+        if (isActive) {
+          setTasks(mergedTasks);
+          saveTasksForUser(ownerId, mergedTasks);
+          setTasksError("");
+        }
+      } catch (error) {
+        if (isActive) {
+          const ownerId = currentUser.id ?? currentUser._id;
+          setTasks(readSavedTasks(ownerId));
+          setTasksError(error.message || "Nepavyko susisiekti su API.");
+        }
+      } finally {
+        if (isActive) setTasksLoading(false);
+      }
+    }
+
+    fetchUserTasks();
+    return () => { isActive = false; };
+  }, [currentUser]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -102,8 +191,8 @@ function App() {
         authenticatedUser = { ...existingUser, id: existingUser.id ?? existingUser._id };
       }
       setCurrentUser(authenticatedUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(authenticatedUser));
       setTasksLoading(true);
-      await loadTasks(authenticatedUser.id);
       setPassword("");
     } catch (error) {
       setAuthError(error.message || "Nepavyko atlikti veiksmo.");
@@ -124,12 +213,17 @@ function App() {
       if (!response.ok) throw new Error(`Nepavyko pridėti užduoties (${response.status}).`);
       const created = await readResponse(response);
       const createdTask = created?.data ?? created;
-      if (createdTask && typeof createdTask === "object") {
-        const savedTask = normalizeTask({ ...newTask, ...createdTask, userId: createdTask.userId ?? createdTask.ownerId ?? ownerId });
-        setTasks((currentTasks) => [...currentTasks, savedTask]);
-      } else {
-        setTasks((currentTasks) => [...currentTasks, normalizeTask({ ...newTask, userId: ownerId, id: `local-${Date.now()}` })]);
-      }
+      const savedTask = normalizeTask({
+        ...newTask,
+        ...(createdTask && typeof createdTask === "object" ? createdTask : {}),
+        id: createdTask?.id ?? createdTask?._id ?? `local-${Date.now()}`,
+        userId: createdTask?.userId ?? createdTask?.ownerId ?? ownerId,
+      });
+      setTasks((currentTasks) => {
+        const updatedTasks = [...currentTasks, savedTask];
+        saveTasksForUser(ownerId, updatedTasks);
+        return updatedTasks;
+      });
       return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko pridėti užduoties.");
@@ -141,6 +235,14 @@ function App() {
     const task = tasks.find((item) => String(item.id) === String(taskId));
     if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) return false;
     setTasksError("");
+    if (String(taskId).startsWith("local-")) {
+      setTasks((currentTasks) => {
+        const updatedTasks = currentTasks.map((item) => String(item.id) === String(taskId) ? { ...item, ...changes } : item);
+        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        return updatedTasks;
+      });
+      return true;
+    }
     try {
       const response = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`, {
         method: "PUT",
@@ -151,11 +253,16 @@ function App() {
       const result = await readResponse(response);
       const returnedTask = result?.data ?? result;
       const savedTask = normalizeTask({ ...task, ...changes, ...(returnedTask && typeof returnedTask === "object" ? returnedTask : {}) });
-      setTasks((currentTasks) => currentTasks.map((item) => String(item.id) === String(taskId) ? savedTask : item));
+      setTasks((currentTasks) => {
+        const updatedTasks = currentTasks.map((item) => String(item.id) === String(taskId) ? savedTask : item);
+        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        return updatedTasks;
+      });
       return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko atnaujinti užduoties.");
-      await loadTasks(currentUser.id ?? currentUser._id);
+      const ownerId = currentUser.id ?? currentUser._id;
+      await loadTasks(ownerId);
       return false;
     }
   }
@@ -173,9 +280,21 @@ function App() {
     try {
       const task = tasks.find((item) => String(item.id) === String(taskId));
       if (!task || String(task.userId ?? task.ownerId) !== String(currentUser.id ?? currentUser._id)) throw new Error("Galite trinti tik savo užduotis.");
+      if (String(taskId).startsWith("local-")) {
+        setTasks((currentTasks) => {
+          const updatedTasks = currentTasks.filter((item) => String(item.id) !== String(taskId));
+          saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+          return updatedTasks;
+        });
+        return;
+      }
       const response = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`Nepavyko ištrinti užduoties (${response.status}).`);
-      setTasks((currentTasks) => currentTasks.filter((task) => String(task.id) !== String(taskId)));
+      setTasks((currentTasks) => {
+        const updatedTasks = currentTasks.filter((task) => String(task.id) !== String(taskId));
+        saveTasksForUser(currentUser.id ?? currentUser._id, updatedTasks);
+        return updatedTasks;
+      });
     } catch (error) {
       setTasksError(error.message || "Nepavyko ištrinti užduoties.");
     }
@@ -226,7 +345,7 @@ function App() {
         </>
       )}
       {activePage === "profile" && currentUser && <Profile user={profileUser} tasks={tasks} />}
-      {currentUser && <button type="button" className="logout-button" onClick={() => { setCurrentUser(null); setPassword(""); setTasks([]); setActivePage("home"); }}>Atsijungti</button>}
+      {currentUser && <button type="button" className="logout-button" onClick={() => { localStorage.removeItem(SESSION_KEY); setCurrentUser(null); setPassword(""); setTasks([]); setActivePage("home"); }}>Atsijungti</button>}
     </>
   );
 }
