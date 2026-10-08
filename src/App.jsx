@@ -97,19 +97,25 @@ function App() {
         body: JSON.stringify({ ...task, ...changes }),
       });
       if (!response.ok) throw new Error(`Nepavyko atnaujinti užduoties (${response.status}).`);
-      const data = await response.json().catch(() => null);
-      const record = data?.data ?? data;
-      const normalizedRecord = record && typeof record === "object" && record.id != null
-        ? normalizeTask(record)
-        : null;
+      await response.json().catch(() => null);
+      const verifyResponse = await fetch(`${TASKS_API}/${encodeURIComponent(taskId)}`);
+      if (!verifyResponse.ok) throw new Error("Užduotis atnaujinta, bet nepavyko patikrinti išsaugotų duomenų.");
+      const data = await verifyResponse.json();
+      const savedTask = normalizeTask(data?.data ?? data);
+      if (String(savedTask.id) !== String(taskId) ||
+          savedTask.title !== changes.title ||
+          savedTask.status !== changes.status ||
+          savedTask.deadline !== changes.deadline) {
+        throw new Error("API negrąžino atnaujintų užduoties duomenų.");
+      }
       setTasks((currentTasks) => currentTasks.map((item) =>
-        String(item.id) === String(taskId)
-          ? { ...task, ...changes, ...(normalizedRecord || {}) }
-          : item,
+        String(item.id) === String(taskId) ? savedTask : item,
       ));
+      return true;
     } catch (error) {
       setTasksError(error.message || "Nepavyko atnaujinti užduoties.");
       await loadTasks();
+      return false;
     }
   }
 
@@ -185,7 +191,7 @@ function App() {
                     <strong>{overdueTaskCount} vėluoja</strong>
                   </p>
                 </section>
-                <TaskList tasks={tasks} loading={tasksLoading} onStatusChange={handleTaskStatusChange} onDeadlineChange={handleTaskDeadlineChange} onDelete={handleDeleteTask} />
+                <TaskList tasks={tasks} loading={tasksLoading} onStatusChange={handleTaskStatusChange} onDeadlineChange={handleTaskDeadlineChange} onTaskUpdate={updateTask} onDelete={handleDeleteTask} />
                 {tasksError && <div className="task-api-error" role="alert"><span>{tasksError}</span><button type="button" onClick={loadTasks}>Bandyti dar kartą</button></div>}
                 <AddTaskForm onAddTask={handleAddTask} />
                 <ProgressBar initialProgress={50} />
